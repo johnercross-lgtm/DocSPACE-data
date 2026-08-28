@@ -1,0 +1,23 @@
+# Build output
+dist/
+build/
+
+# Local Python environments
+.venv/
+venv/
+env/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Temporary database / archive artifacts from local runs
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.zip
+
+# Editor / OS noise
+.DS_Store

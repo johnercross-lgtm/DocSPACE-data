@@ -11,15 +11,28 @@ The reimbursement release workflow builds the assets consumed by the DocSPACE iO
 The ZIP contains exactly one file: `reimbursement.sqlite`. The manifest SHA-256 is calculated from
 the ZIP bytes, matching the client-side verification flow.
 
-Source discovery starts from the Ministry of Health dataset on data.gov.ua:
-
-`https://data.gov.ua/api/3/action/package_show?id=21a6930e-4346-461c-8d80-abeb6f9c0ae2`
-
-The workflow does not treat the dataset page update date as a new database version. It only
-publishes when the newest valid XLSX resource has a register date newer than the currently published
-manifest. The builder checks the resource name/description, the workbook register date, expected
+The workflow is manual-input only. Place exactly one official XLSX file in
+`input/reimbursement/` before starting `workflow_dispatch`. The workflow does not discover or
+download source files from data.gov.ua or NSZU. It checks the workbook register date, expected
 columns, expected medicine/insulin/combined sections, row counts, SQLite integrity, required tables,
-required columns, ZIP contents, and ZIP checksum before a GitHub Release is created.
+required columns, ZIP contents, and ZIP checksum. The previous GitHub Release is used only as a
+baseline for validation and curated `icd10_codes` transfer.
+
+GitHub Release creation is currently disabled. Successful runs upload the generated SQLite, ZIP,
+manifest, and build summary as GitHub Actions artifacts.
+
+## Tests
+
+The pipeline guards (baseline preservation, volume checks, versioning, ICD-10 retention, parser
+and numeric-format guards) are covered by tests that need no extra dependencies beyond
+`requirements.txt`:
+
+```
+python -m unittest discover -s tests -t .
+```
+
+The same command runs in the workflow before the build, so a broken guard fails the run instead of
+producing an artifact.
 
 The public NSZU page remains the official user-facing reference for the full list:
 
