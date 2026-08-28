@@ -1,0 +1,102 @@
+name: Update reimbursement database
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * *"
+
+concurrency:
+  group: reimbursement-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  update-reimbursement:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Download latest published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/latest"
+          release_json="$RUNNER_TEMP/latest/latest-release.json"
+          http_code=$(curl -sS -o "$release_json" -w "%{http_code}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest")
+          if [ "$http_code" = "404" ]; then
+            echo "No previous release: first-release case"
+            exit 0
+          fi
+          if [ "$http_code" != "200" ]; then
+            cat "$release_json" >&2
+            echo "Failed to fetch latest GitHub Release (HTTP $http_code)" >&2
+            exit 1
+          fi
+
+          manifest_url=$(jq -r '.assets[] | select(.name == "reimbursement_manifest.json") | .browser_download_url' "$release_json" | head -n 1)
+          zip_url=$(jq -r '.assets[] | select(.name == "reimbursement.zip" or .name == "reimbursement.sqlite.zip") | .browser_download_url' "$release_json" | head -n 1)
+          if [ -z "$manifest_url" ] || [ "$manifest_url" = "null" ] || [ -z "$zip_url" ] || [ "$zip_url" = "null" ]; then
+            echo "Latest release is missing reimbursement baseline assets" >&2
+            exit 1
+          fi
+
+          curl -fsSL --retry 3 -H "Authorization: Bearer $GH_TOKEN" "$manifest_url" \
+            -o "$RUNNER_TEMP/latest/reimbursement_manifest.json"
+          zip_name=$(basename "${zip_url%%\?*}")
+          curl -fsSL --retry 3 -H "Authorization: Bearer $GH_TOKEN" "$zip_url" \
+            -o "$RUNNER_TEMP/latest/$zip_name"
+          if [ -f "$RUNNER_TEMP/latest/reimbursement.zip" ]; then
+            echo "PREVIOUS_ZIP=$RUNNER_TEMP/latest/reimbursement.zip" >> "$GITHUB_ENV"
+          elif [ -f "$RUNNER_TEMP/latest/reimbursement.sqlite.zip" ]; then
+            echo "PREVIOUS_ZIP=$RUNNER_TEMP/latest/reimbursement.sqlite.zip" >> "$GITHUB_ENV"
+          fi
+          if [ -f "$RUNNER_TEMP/latest/reimbursement_manifest.json" ]; then
+            echo "PREVIOUS_MANIFEST=$RUNNER_TEMP/latest/reimbursement_manifest.json" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build release assets
+        run: |
+          args=(--work-dir dist --repo "$GITHUB_REPOSITORY")
+          if [ -n "${PREVIOUS_MANIFEST:-}" ]; then
+            args+=(--previous-manifest "$PREVIOUS_MANIFEST")
+          fi
+          if [ -n "${PREVIOUS_ZIP:-}" ]; then
+            args+=(--previous-zip "$PREVIOUS_ZIP")
+          fi
+          python scripts/reimbursement/build_reimbursement_release.py "${args[@]}"
+
+      - name: Print build summary
+        run: |
+          cat dist/build_summary.json
+          echo "publish=$(jq -r '.publish' dist/build_summary.json)" >> "$GITHUB_ENV"
+          echo "database_version=$(jq -r '.database_version' dist/build_summary.json)" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub Release
+        if: env.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="reimbursement-v${database_version}"
+          gh release create "$tag" \
+            dist/reimbursement.zip \
+            dist/reimbursement_manifest.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Reimbursement database v${database_version}" \
+            --notes-file dist/build_summary.json \
+            --latest
